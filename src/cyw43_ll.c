@@ -2108,6 +2108,7 @@ int cyw43_ll_wifi_join(cyw43_ll_t *self_in, size_t ssid_len, const uint8_t *ssid
     cyw43_put_le32(self->last_ssid_joined, ssid_len);
     memcpy(self->last_ssid_joined + 4, ssid, ssid_len);
 
+    /* Finds preffered AP SSID using BSSID */
     if (bssid) {
         memset(buf, 0, 4 + 32 + 20 + 14);
         cyw43_put_le32(buf, ssid_len);
@@ -2126,7 +2127,15 @@ int cyw43_ll_wifi_join(cyw43_ll_t *self_in, size_t ssid_len, const uint8_t *ssid
         #define WL_CHANSPEC_CTL_SB_NONE     WL_CHANSPEC_CTL_SB_LLL
         #define WL_CHANSPEC_BAND_2G        0x0000
         memcpy(buf + 4 + 32 + 20, bssid, 6);
-        cyw43_put_le32(buf + 4 + 32 + 20 + 8, 1); // chanspec_num
+
+        if (channel) {
+          cyw43_put_le32(buf + 4 + 32 + 20 + 8, 1); // chanspec_num
+        }
+        else {
+          /* Disable channel specification */
+          cyw43_put_le32(buf + 4 + 32 + 20 + 8, 0); // chanspec_num
+        }
+
         uint16_t chspec = channel | WL_CHANSPEC_BW_20 | WL_CHANSPEC_CTL_SB_NONE | WL_CHANSPEC_BAND_2G;
         cyw43_put_le16(buf + 4 + 32 + 20 + 12, chspec); // chanspec_list
 
