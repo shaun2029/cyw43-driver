@@ -53,7 +53,7 @@ int sdio_transfer(uint32_t cmd, uint32_t arg, uint32_t *resp);
 void sdio_enable_high_speed_4bit(void);
 #endif
 
-#define FLASH_BLOCK_SIZE (512)
+#define CYW43_FLASH_BLOCK_SIZE (512)
 uint32_t storage_read_blocks(uint8_t *dest, uint32_t block_num, uint32_t num_blocks);
 
 struct pbuf;
@@ -244,6 +244,7 @@ static const uint8_t wifi_nvram_4343[] __attribute__((aligned(4))) =
 #define WLC_GET_ANTDIV (63)
 #define WLC_SET_ANTDIV (64)
 #define WLC_SET_DTIMPRD (78)
+#define WLC_GET_PM (85)
 #define WLC_SET_PM (86)
 #define WLC_SET_GMODE (110)
 #define WLC_SET_WSEC (134)
@@ -431,9 +432,9 @@ static int cyw43_download_resource(cyw43_int_t *self, uint32_t addr, size_t raw_
         uint32_t fw_end;
         if (from_storage) {
             // get the last aligned-1024 bytes
-            uint32_t last_bl = (raw_len - 1) / FLASH_BLOCK_SIZE;
+            uint32_t last_bl = (raw_len - 1) / CYW43_FLASH_BLOCK_SIZE;
             storage_read_blocks(self->spid_buf, source + last_bl - 1, 2);
-            fw_end = raw_len - (last_bl - 1) * FLASH_BLOCK_SIZE;
+            fw_end = raw_len - (last_bl - 1) * CYW43_FLASH_BLOCK_SIZE;
             b = self->spid_buf;
         } else {
             // get the last 800 bytes
@@ -468,6 +469,8 @@ static int cyw43_download_resource(cyw43_int_t *self, uint32_t addr, size_t raw_
     #endif
 
     for (size_t offset = 0; offset < len; offset += block_size) {
+        CYW43_EVENT_POLL_HOOK;
+
         size_t sz = block_size;
         if (offset + sz > len) {
             sz = len - offset;
@@ -477,7 +480,7 @@ static int cyw43_download_resource(cyw43_int_t *self, uint32_t addr, size_t raw_
         cyw43_set_backplane_window(self, dest_addr);
         const uint8_t *src;
         if (from_storage) {
-            storage_read_blocks(self->spid_buf, source + offset / FLASH_BLOCK_SIZE, block_size / FLASH_BLOCK_SIZE);
+            storage_read_blocks(self->spid_buf, source + offset / CYW43_FLASH_BLOCK_SIZE, block_size / CYW43_FLASH_BLOCK_SIZE);
             src = self->spid_buf;
         } else {
             src = (const uint8_t *)source + offset;
@@ -511,7 +514,7 @@ static int cyw43_download_resource(cyw43_int_t *self, uint32_t addr, size_t raw_
         cyw43_read_bytes(self, BACKPLANE_FUNCTION, dest_addr & BACKPLANE_ADDR_MASK, sz, buf);
         const uint8_t *src;
         if (from_storage) {
-            storage_read_blocks(self->spid_buf, source + offset / FLASH_BLOCK_SIZE, verify_block_size / FLASH_BLOCK_SIZE);
+            storage_read_blocks(self->spid_buf, source + offset / CYW43_FLASH_BLOCK_SIZE, verify_block_size / CYW43_FLASH_BLOCK_SIZE);
             src = self->spid_buf;
         } else {
             src = (const uint8_t *)source + offset;
@@ -781,6 +784,7 @@ static const char *ioctl_cmd_name(int id) {
         CASE_RETURN_STRING(WLC_GET_ANTDIV)
         CASE_RETURN_STRING(WLC_SET_ANTDIV)
         CASE_RETURN_STRING(WLC_SET_DTIMPRD)
+        CASE_RETURN_STRING(WLC_GET_PM)
         CASE_RETURN_STRING(WLC_SET_PM)
         CASE_RETURN_STRING(WLC_SET_GMODE)
         CASE_RETURN_STRING(WLC_SET_WSEC)
@@ -1418,6 +1422,8 @@ static void cyw43_clm_load(cyw43_int_t *self, const uint8_t *clm_ptr, size_t clm
 
     const size_t clm_dload_chunk_len = CLM_CHUNK_LEN;
     for (size_t off = 0; off < clm_len; off += clm_dload_chunk_len) {
+        CYW43_EVENT_POLL_HOOK;
+
         uint32_t len = clm_dload_chunk_len;
         uint16_t flag = 1 << 12; // DLOAD_HANDLER_VER
         if (off == 0) {
@@ -1499,7 +1505,9 @@ int cyw43_ll_bus_init(cyw43_ll_t *self_in, const uint8_t *mac) {
         }
 
         cyw43_spi_gpio_setup();
+        CYW43_EVENT_POLL_HOOK;
         cyw43_spi_reset();
+        CYW43_EVENT_POLL_HOOK;
 
         // Check test register can be read
         for (int i = 0; i < 10; ++i) {
@@ -1829,13 +1837,19 @@ f2_ready:
 /*******************************************************************************/
 // WiFi stuff
 
-static void cyw43_do_ioctl_u32(cyw43_int_t *self, uint32_t kind, uint32_t cmd, uint32_t val, uint32_t iface) {
+static void cyw43_set_ioctl_u32(cyw43_int_t *self, uint32_t cmd, uint32_t val, uint32_t iface) {
     uint8_t *buf = &self->spid_buf[SDPCM_HEADER_LEN + 16];
     cyw43_put_le32(buf, val);
-    cyw43_do_ioctl(self, kind, cmd, 4, buf, iface);
+    cyw43_do_ioctl(self, SDPCM_SET, cmd, 4, buf, iface);
 }
 
-#if 0
+static uint32_t cyw43_get_ioctl_u32(cyw43_int_t *self, uint32_t cmd, uint32_t iface) {
+    uint8_t *buf = &self->spid_buf[SDPCM_HEADER_LEN + 16];
+    cyw43_put_le32(buf, 0);
+    cyw43_do_ioctl(self, SDPCM_GET, cmd, 4, buf, iface);
+    return cyw43_get_le32(buf);
+}
+
 static uint32_t cyw43_read_iovar_u32(cyw43_int_t *self, const char *var, uint32_t iface) {
     uint8_t *buf = &self->spid_buf[SDPCM_HEADER_LEN + 16];
     size_t len = strlen(var) + 1;
@@ -1844,7 +1858,6 @@ static uint32_t cyw43_read_iovar_u32(cyw43_int_t *self, const char *var, uint32_
     cyw43_do_ioctl(self, SDPCM_GET, WLC_GET_VAR, len + 4, buf, iface);
     return cyw43_get_le32(buf);
 }
-#endif
 
 #if 0
 #define WLC_SET_MONITOR (108)
@@ -1859,7 +1872,7 @@ int cyw43_set_monitor_mode(cyw43_ll_t *self, int value) {
     CYW_ENTER
     self->is_monitor_mode = value;
     cyw43_write_iovar_u32(self, "allmulti", value, WWD_STA_INTERFACE);
-    cyw43_do_ioctl_u32(self, SDPCM_SET, WLC_SET_MONITOR, value, WWD_STA_INTERFACE);
+    cyw43_set_ioctl_u32(self, WLC_SET_MONITOR, value, WWD_STA_INTERFACE);
     CYW_EXIT
     CYW_THREAD_EXIT
 
@@ -1900,7 +1913,7 @@ int cyw43_ll_wifi_on(cyw43_ll_t *self_in, uint32_t country) {
     #endif
 
     // Set antenna to chip antenna
-    cyw43_do_ioctl_u32(self, SDPCM_SET, WLC_SET_ANTDIV, 0, WWD_STA_INTERFACE);
+    cyw43_set_ioctl_u32(self, WLC_SET_ANTDIV, 0, WWD_STA_INTERFACE);
 
     // Set some WiFi config
     cyw43_write_iovar_u32(self, "bus:txglom", 0, WWD_STA_INTERFACE); // tx glomming off
@@ -1995,7 +2008,7 @@ int cyw43_ll_wifi_pm(cyw43_ll_t *self_in, uint32_t pm, uint32_t pm_sleep_ret, ui
     CYW43_PRINTF("assoc_listen: %lu\n", cyw43_read_iovar_u32(self, "assoc_listen", WWD_STA_INTERFACE));
     #endif
 
-    cyw43_do_ioctl_u32(self, SDPCM_SET, WLC_SET_PM, pm, WWD_STA_INTERFACE);
+    cyw43_set_ioctl_u32(self, WLC_SET_PM, pm, WWD_STA_INTERFACE);
 
     // Set GMODE_AUTO
     uint8_t *buf = &self->spid_buf[SDPCM_HEADER_LEN + 16];
@@ -2005,6 +2018,16 @@ int cyw43_ll_wifi_pm(cyw43_ll_t *self_in, uint32_t pm, uint32_t pm_sleep_ret, ui
     cyw43_put_le32(buf, 0); // any
     cyw43_do_ioctl(self, SDPCM_SET, WLC_SET_BAND, 4, buf, WWD_STA_INTERFACE);
 
+    return 0;
+}
+
+int cyw43_ll_wifi_get_pm(cyw43_ll_t *self_in, uint32_t *pm, uint32_t *pm_sleep_ret, uint32_t *li_bcn, uint32_t *li_dtim, uint32_t *li_assoc) {
+    cyw43_int_t *self = CYW_INT_FROM_LL(self_in);
+    *pm_sleep_ret = cyw43_read_iovar_u32(self, "pm2_sleep_ret", WWD_STA_INTERFACE);
+    *li_bcn = cyw43_read_iovar_u32(self, "bcn_li_bcn", WWD_STA_INTERFACE);
+    *li_dtim = cyw43_read_iovar_u32(self, "bcn_li_dtim", WWD_STA_INTERFACE);
+    *li_assoc = cyw43_read_iovar_u32(self, "assoc_listen", WWD_STA_INTERFACE);
+    *pm = cyw43_get_ioctl_u32(self, WLC_GET_PM, WWD_STA_INTERFACE);
     return 0;
 }
 
@@ -2056,7 +2079,7 @@ int cyw43_ll_wifi_join(cyw43_ll_t *self_in, size_t ssid_len, const uint8_t *ssid
     }
 
     CYW43_VDEBUG("Setting wsec=0x%lx\n", auth_type & 0xff);
-    cyw43_do_ioctl_u32(self, SDPCM_SET, WLC_SET_WSEC, auth_type & 0xff, WWD_STA_INTERFACE);
+    cyw43_set_ioctl_u32(self, WLC_SET_WSEC, auth_type & 0xff, WWD_STA_INTERFACE);
 
     // supplicant variable
     CYW43_VDEBUG("Setting sup_wpa=%d\n", auth_type == 0 ? 0 : 1);
@@ -2083,15 +2106,15 @@ int cyw43_ll_wifi_join(cyw43_ll_t *self_in, size_t ssid_len, const uint8_t *ssid
 
     // set infrastructure mode
     CYW43_VDEBUG("Setting infra\n");
-    cyw43_do_ioctl_u32(self, SDPCM_SET, WLC_SET_INFRA, 1, WWD_STA_INTERFACE);
+    cyw43_set_ioctl_u32(self, WLC_SET_INFRA, 1, WWD_STA_INTERFACE);
 
     // set auth type (open system)
     CYW43_VDEBUG("Setting auth\n");
-    cyw43_do_ioctl_u32(self, SDPCM_SET, WLC_SET_AUTH, 0, WWD_STA_INTERFACE);
+    cyw43_set_ioctl_u32(self, WLC_SET_AUTH, 0, WWD_STA_INTERFACE);
 
     // set WPA auth mode
     CYW43_VDEBUG("Setting wpa auth 0x%lx\n", wpa_auth);
-    cyw43_do_ioctl_u32(self, SDPCM_SET, WLC_SET_WPA_AUTH, wpa_auth, WWD_STA_INTERFACE);
+    cyw43_set_ioctl_u32(self, WLC_SET_WPA_AUTH, wpa_auth, WWD_STA_INTERFACE);
 
     // allow relevant events through:
     //  EV_SET_SSID=0
@@ -2154,7 +2177,7 @@ int cyw43_ll_wifi_join(cyw43_ll_t *self_in, size_t ssid_len, const uint8_t *ssid
 
 void cyw43_ll_wifi_set_wpa_auth(cyw43_ll_t *self_in) {
     cyw43_int_t *self = CYW_INT_FROM_LL(self_in);
-    cyw43_do_ioctl_u32(self, SDPCM_SET, WLC_SET_WPA_AUTH, CYW43_WPA_AUTH_PSK, WWD_STA_INTERFACE);
+    cyw43_set_ioctl_u32(self, WLC_SET_WPA_AUTH, CYW43_WPA_AUTH_PSK, WWD_STA_INTERFACE);
 }
 
 void cyw43_ll_wifi_rejoin(cyw43_ll_t *self_in) {
@@ -2194,7 +2217,7 @@ int cyw43_ll_wifi_ap_init(cyw43_ll_t *self_in, size_t ssid_len, const uint8_t *s
     cyw43_write_iovar_n(self, "bsscfg:ssid", 4 + 4 + 32, buf, WWD_STA_INTERFACE);
 
     // set channel
-    cyw43_do_ioctl_u32(self, SDPCM_SET, WLC_SET_CHANNEL, channel, WWD_STA_INTERFACE);
+    cyw43_set_ioctl_u32(self, WLC_SET_CHANNEL, channel, WWD_STA_INTERFACE);
 
     // set security type
     cyw43_write_iovar_u32_u32(self, "bsscfg:wsec", WWD_AP_INTERFACE, auth, WWD_STA_INTERFACE);
@@ -2221,13 +2244,13 @@ int cyw43_ll_wifi_ap_init(cyw43_ll_t *self_in, size_t ssid_len, const uint8_t *s
     }
 
     // set GMode to auto (value of 1)
-    cyw43_do_ioctl_u32(self, SDPCM_SET, WLC_SET_GMODE, 1, WWD_AP_INTERFACE);
+    cyw43_set_ioctl_u32(self, WLC_SET_GMODE, 1, WWD_AP_INTERFACE);
 
     // set multicast tx rate to 11Mbps
     cyw43_write_iovar_u32(self, "2g_mrate", 11000000 / 500000, WWD_AP_INTERFACE);
 
     // set DTIM period
-    cyw43_do_ioctl_u32(self, SDPCM_SET, WLC_SET_DTIMPRD, 1, WWD_AP_INTERFACE);
+    cyw43_set_ioctl_u32(self, WLC_SET_DTIMPRD, 1, WWD_AP_INTERFACE);
 
     return 0;
 }

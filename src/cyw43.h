@@ -103,10 +103,11 @@ typedef struct _cyw43_t {
     bool pend_disassoc;
     bool pend_rejoin;
     bool pend_rejoin_wpa;
+    bool pend_restore_pm;
 
     // AP settings
+    uint32_t ap_auth;
     uint8_t ap_channel;
-    uint8_t ap_auth;
     uint8_t ap_ssid_len;
     uint8_t ap_key_len;
     uint8_t ap_ssid[32];
@@ -124,6 +125,9 @@ typedef struct _cyw43_t {
 
     // mac from otp (or from cyw43_hal_generate_laa_mac if not set)
     uint8_t mac[6];
+
+    // Power management setting, restored after connect
+    uint32_t saved_pm;
 } cyw43_t;
 
 extern cyw43_t cyw43_state;
@@ -202,6 +206,24 @@ int cyw43_set_allmulti(cyw43_t *self, bool value);
  * \return 0 on success
  */
 int cyw43_wifi_pm(cyw43_t *self, uint32_t pm);
+
+/*!
+ * \brief Get the wifi power management mode
+ *
+ * This method gets the power management mode used by cyw43.
+ * The value is expressed as an unsigned integer 0x00adbrrm where,
+ * m = pm_mode Power management mode
+ * rr = pm2_sleep_ret (in units of 10ms)
+ * b = li_beacon_period
+ * d = li_dtim_period
+ * a = li_assoc
+ * \see cyw43_pm_value for an explanation of these values
+ * This should be called after cyw43_wifi_set_up
+ *
+ * \param pm Power management value
+ * \return 0 on success
+ */
+int cyw43_wifi_get_pm(cyw43_t *self, uint32_t *pm);
 
 /*!
  * \brief Get the wifi link status
@@ -328,6 +350,18 @@ static inline void cyw43_wifi_ap_get_ssid(cyw43_t *self, size_t *len, const uint
 }
 
 /*!
+ * \brief Get the security authorisation used in AP mode
+ *
+ * For access point (AP) mode, this method can be used to get the security authorisation mode.
+ *
+ * \param self the driver state object. This should always be \c &cyw43_state
+ * \return the current security authorisation mode for the access point
+ */
+static inline uint32_t cyw43_wifi_ap_get_auth(cyw43_t *self) {
+    return self->ap_auth;
+}
+
+/*!
  * \brief Set the the channel for the access point
  *
  * For access point (AP) mode, this method can be used to set the channel used for the wifi access point.
@@ -383,7 +417,7 @@ static inline void cyw43_wifi_ap_set_password(cyw43_t *self, size_t len, const u
  * \param auth Auth mode for the access point
  */
 static inline void cyw43_wifi_ap_set_auth(cyw43_t *self, uint32_t auth) {
-    self->ap_auth = (uint8_t) auth;
+    self->ap_auth = auth;
 }
 
 /*!
